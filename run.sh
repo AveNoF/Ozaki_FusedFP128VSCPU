@@ -1,15 +1,12 @@
 #!/bin/bash
-echo "=== 🛠️  Improved Ozaki Hybrid Build ==="
-g++ -O3 -fopenmp -fPIC -c hybrid_reconstruction.cpp -o host_part.o
-nvcc -arch=sm_86 -O3 -Xcompiler "-fopenmp -fPIC" -c hybrid_benchmark.cu -o device_part.o
-nvcc -arch=sm_86 host_part.o device_part.o -o hybrid_bench -lcublas -lquadmath -lmpfr -lgmp -lgomp
+echo "=== 🛡️ Building Reliable Engine (N <= 4096) ==="
+rm -f *.o trust_bench
+g++ -O3 -fopenmp -fPIC -c hybrid_reconstruction.cpp -o host.o
+nvcc -arch=sm_75 -O3 -Xcompiler "-fopenmp -fPIC" -c hybrid_benchmark.cu -o device.o
+nvcc -arch=sm_75 host.o device.o -o trust_bench -lcublas -lquadmath -lgomp
 
 if [ $? -eq 0 ]; then
-    echo "=== 🚀 Running Benchmark (N=32 to 16384) ==="
-    ./hybrid_bench
-    echo "=== 📊 Generating Graph ==="
-    python3 plot_results.py
+    ./trust_bench
 else
     echo "=== ❌ Build Failed ==="
-    exit 1
 fi
