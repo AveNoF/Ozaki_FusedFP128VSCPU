@@ -16,7 +16,6 @@ extern "C" {
     void split_vector_f128(int n, int s_vec, const void* v_ptr, half* h_sx, int* h_tx, double rho);
     void cpu_accumulate_f128(int n, const int* h_ta_row, int tx_val, const float* h_tmp_gpu, void* h_y_ptr);
     void cpu_final_eval(int n, const void* h_y_hy, const void* h_A_ptr, const void* h_x_ptr, double* results);
-    // グラフ比較用：CPUでのナイーブ計算
-    void cpu_naive_fp128(int n, const void* A, const void* x, void* y, double* time_ms);
+    void cpu_naive_fp128(int n, const void* A_ptr, const void* x_ptr, void* y_ptr, double* time_ms);
 }
 #endif

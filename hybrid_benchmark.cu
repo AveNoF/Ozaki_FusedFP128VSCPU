@@ -15,7 +15,7 @@ void run_benchmark(int n, cublasHandle_t handle, std::ofstream& csv) {
     half *d_sa, *d_sx; float *d_tmp;
     cudaMalloc(&d_sa, n_sq * 2); cudaMalloc(&d_sx, n * 2); cudaMalloc(&d_tmp, n * 4);
 
-    double rho = 107.0; // 理論値
+    double rho = 107.0; 
     std::vector<half> h_sa_all(n_sq * S_MAT); std::vector<int> h_ta_all(n * S_MAT);
     std::vector<half> h_sx_all(n * S_VEC); std::vector<int> h_tx_all(S_VEC);
 
@@ -39,32 +39,21 @@ void run_benchmark(int n, cublasHandle_t handle, std::ofstream& csv) {
     float t_hy; cudaEventElapsedTime(&t_hy, st, ed);
     double err_hy; cpu_final_eval(n, h_y_hy, h_A, h_x, &err_hy);
 
-    // Baseline: cuBLAS FP64
-    double *d_A64, *d_x64, *d_y64;
-    cudaMalloc(&d_A64, n_sq * 8); cudaMalloc(&d_x64, n * 8); cudaMalloc(&d_y64, n * 8);
-    // (A, x の double 変換略、実際には計算が必要) ...
-    // 今回は簡易化のため cuBLAS Time と CPU Naive Time を取得
-    float t_cu; cudaEventRecord(st);
-    double a64=1.0, b64=0.0;
-    cublasDgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, n, 1, n, &a64, d_A64, n, d_x64, n, &b64, d_y64, n);
-    cudaEventRecord(ed); cudaEventSynchronize(ed);
-    cudaEventElapsedTime(&t_cu, st, ed);
-
+    // CPU Baseline
     double t_cpu_naive; void* h_y_naive = malloc(n * 16);
     cpu_naive_fp128(n, h_A, h_x, h_y_naive, &t_cpu_naive);
 
-    csv << n << "," << t_hy << "," << err_hy << "," << t_cu << ",1e-15," << t_cpu_naive << ",1e-33\n";
-    printf("N=%d Done.\n", n);
+    csv << n << "," << t_hy << "," << err_hy << "," << t_cpu_naive << ",1e-33\n";
+    printf("N=%d | RMSE: %.2e | HyTime: %.1f ms | CPUPerc: %.1f%%\n", n, err_hy, t_hy, (t_hy/t_cpu_naive)*100);
 
     cudaFree(d_sa); cudaFree(d_sx); cudaFree(d_tmp);
-    cudaFree(d_A64); cudaFree(d_x64); cudaFree(d_y64);
     free_f128(h_A, h_x, h_y_hy); free(h_y_naive);
 }
 
 int main() {
     cublasHandle_t h; cublasCreate(&h);
     std::ofstream csv("results.csv");
-    csv << "n,hy_time,hy_err,cu_time,cu_err,cpu_time,cpu_err\n";
+    csv << "n,hy_time,hy_err,cpu_time,cpu_err\n";
     for(int n=128; n<=4096; n*=2) run_benchmark(n, h, csv);
     cublasDestroy(h); return 0;
 }

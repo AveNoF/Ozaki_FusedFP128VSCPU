@@ -34,7 +34,7 @@ void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_t
                 size_t idx = (size_t)i * n + j;
                 float128_t q = (res[idx] + sigma) - sigma;
                 h_sa[(size_t)s * n_sq + idx] = __double2half((double)scalbnq(q, -ta));
-                res[idx] -= q; // [cite: 155]
+                res[idx] -= q;
             }
         }
     }
