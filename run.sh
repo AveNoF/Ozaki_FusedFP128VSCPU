@@ -1,5 +1,5 @@
 #!/bin/bash
-echo "=== 🛡️ Building Reliable Engine (N <= 4096) ==="
+echo "=== 🛡️ Building Reliable Engine (RTX 2060 / sm_75) ==="
 rm -f *.o trust_bench
 g++ -O3 -fopenmp -fPIC -c hybrid_reconstruction.cpp -o host_part.o
 nvcc -arch=sm_75 -O3 -Xcompiler "-fopenmp -fPIC" -c hybrid_benchmark.cu -o device_part.o

@@ -11,11 +11,15 @@
 #endif
 
 extern "C" {
-    // 33桁行列とベクトルの高精度分割
+    // 33桁データの生成とメモリ確保 (CPU)
+    void allocate_and_init_f128(int n, void** A_ptr, void** x_ptr);
+    void free_f128(void* A_ptr, void* x_ptr);
+
+    // 33桁行列とベクトルの Ozaki 分割 (CPU)
     void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_ta, double rho);
     void split_vector_f128(int n, int s_vec, const void* v_ptr, half* h_sx, int* h_tx, double rho);
 
-    // 33桁再構成と評価
+    // 33桁再構成と評価 (CPU)
     void cpu_reconstruct_and_eval(
         int n, int s_mat, int s_vec,
         const float* h_tmpc, const int* h_ta, const int* h_tx,
