@@ -1,11 +1,12 @@
 #include "hybrid_reconstruction.hpp"
 #include <cmath>
 #include <omp.h>
-#include <iostream>
-#include <vector>
 #include <cstdlib>
 
 using namespace std;
+
+// half型の代わりに unsigned short を使用してCUDAヘッダー依存を消す
+typedef unsigned short half_raw;
 
 void allocate_and_init_f128(int n, void** A_ptr, void** x_ptr, void** y_ptr) {
     size_t n_sq = (size_t)n * n;
@@ -19,9 +20,22 @@ void allocate_and_init_f128(int n, void** A_ptr, void** x_ptr, void** y_ptr) {
 
 void free_f128(void* A_ptr, void* x_ptr, void* y_ptr) { free(A_ptr); free(x_ptr); free(y_ptr); }
 
-void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_ta, double rho) {
+// doubleをhalf(raw)に変換するヘルパー
+half_raw double_to_half_raw(double val) {
+    float f = (float)val;
+    unsigned int i = *((unsigned int*)&f);
+    unsigned int s = (i >> 16) & 0x8000;
+    unsigned int e = ((i >> 23) & 0xff) - (127 - 15);
+    unsigned int m = (i >> 13) & 0x3ff;
+    if (e <= 0) return (half_raw)s;
+    if (e >= 31) return (half_raw)(s | 0x7c00);
+    return (half_raw)(s | (e << 10) | m);
+}
+
+void split_matrix_f128(int n, int s_mat, const void* A_ptr, void* h_sa, int* h_ta, double rho) {
     size_t n_sq = (size_t)n * n;
     const float128_t* A = (const float128_t*)A_ptr;
+    half_raw* dst = (half_raw*)h_sa;
     vector<float128_t> res(n_sq);
     for(size_t i=0; i<n_sq; i++) res[i] = A[i];
     for (int s = 0; s < s_mat; s++) {
@@ -35,15 +49,16 @@ void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_t
             for (int j = 0; j < n; j++) {
                 size_t idx = (size_t)i * n + j;
                 float128_t q = (res[idx] + sigma) - sigma;
-                h_sa[(size_t)s * n_sq + idx] = __double2half((double)scalbnq(q, -tx));
-                res[idx] -= scalbnq((float128_t)h_sa[(size_t)s * n_sq + idx], tx);
+                dst[(size_t)s * n_sq + idx] = double_to_half_raw((double)scalbnq(q, -tx));
+                res[idx] -= scalbnq((float128_t)dst[(size_t)s * n_sq + idx], tx); // 簡易化
             }
         }
     }
 }
 
-void split_vector_f128(int n, int s_vec, const void* v_ptr, half* h_sx, int* h_tx, double rho) {
+void split_vector_f128(int n, int s_vec, const void* v_ptr, void* h_sx, int* h_tx, double rho) {
     const float128_t* v = (const float128_t*)v_ptr;
+    half_raw* dst = (half_raw*)h_sx;
     vector<float128_t> res(n);
     for(int i=0; i<n; i++) res[i] = v[i];
     for (int t = 0; t < s_vec; t++) {
@@ -54,19 +69,15 @@ void split_vector_f128(int n, int s_vec, const void* v_ptr, half* h_sx, int* h_t
         float128_t sigma = scalbnq(0.75Q, (int)rho + tx);
         for (int i = 0; i < n; i++) {
             float128_t q = (res[i] + sigma) - sigma;
-            h_sx[(size_t)t * n + i] = __double2half((double)scalbnq(q, -tx));
-            res[i] -= scalbnq((float128_t)h_sx[(size_t)t * n + i], tx);
+            dst[(size_t)t * n + i] = double_to_half_raw((double)scalbnq(q, -tx));
+            res[i] -= scalbnq((float128_t)dst[(size_t)t * n + i], tx);
         }
     }
 }
 
-void cpu_accumulate_f128(int n, int ta_idx, int tx_val, const float* h_tmp_gpu, void* h_y_ptr) {
-    float128_t* y = (float128_t*)h_y_ptr;
-    #pragma omp parallel for
-    for(int i=0; i<n; i++) {
-        // GPUの計算結果(float)を即座に128bitへ足し込む
-        y[i] += scalbnq((float128_t)h_tmp_gpu[i], ta_idx + tx_val);
-    }
+void cpu_accumulate_f128(int n, int ta_val, int tx_val, const float* h_tmp_gpu, void* h_y_ptr_i) {
+    float128_t* yi = (float128_t*)h_y_ptr_i;
+    *yi += scalbnq((float128_t)(*h_tmp_gpu), ta_val + tx_val);
 }
 
 void cpu_final_eval(int n, const void* h_y_hy_ptr, const void* h_A_ptr, const void* h_x_ptr, double t_total, double* out) {
