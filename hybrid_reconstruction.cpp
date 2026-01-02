@@ -3,6 +3,7 @@
 #include <omp.h>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 
 using namespace std;
 
@@ -19,9 +20,9 @@ void allocate_and_init_f128(int n, void** A_ptr, void** x_ptr, void** y_ptr) {
 void free_f128(void* A_ptr, void* x_ptr, void* y_ptr) { free(A_ptr); free(x_ptr); free(y_ptr); }
 
 void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_ta, double rho) {
-    size_t n_sq = (size_t)n * n;
-    vector<float128_t> res(n_sq);
-    memcpy(res.data(), A_ptr, n_sq * 16);
+    const float128_t* A = (const float128_t*)A_ptr;
+    vector<float128_t> res((size_t)n * n);
+    memcpy(res.data(), A, (size_t)n * n * 16);
     for (int s = 0; s < s_mat; s++) {
         #pragma omp parallel for
         for (int i = 0; i < n; i++) {
@@ -33,7 +34,7 @@ void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_t
             for (int j = 0; j < n; j++) {
                 size_t idx = (size_t)i * n + j;
                 float128_t q = (res[idx] + sigma) - sigma;
-                h_sa[(size_t)s * n_sq + idx] = __double2half((double)scalbnq(q, -ta));
+                h_sa[(size_t)s * (size_t)n * n + idx] = __double2half((double)scalbnq(q, -ta));
                 res[idx] -= q;
             }
         }
@@ -41,8 +42,9 @@ void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_t
 }
 
 void split_vector_f128(int n, int s_vec, const void* v_ptr, half* h_sx, int* h_tx, double rho) {
+    const float128_t* v = (const float128_t*)v_ptr;
     vector<float128_t> res(n);
-    memcpy(res.data(), v_ptr, n * 16);
+    memcpy(res.data(), v, n * 16);
     for (int t = 0; t < s_vec; t++) {
         float128_t mx = 0;
         for(int i=0; i<n; i++) mx = fmaxq(mx, fabsq(res[i]));
@@ -62,28 +64,66 @@ void cpu_accumulate_f128(int n, const int* h_ta_row, int tx_val, const float* h_
     for(int i=0; i<n; i++) y[i] += scalbnq((float128_t)h_tmp_gpu[i], h_ta_row[i] + tx_val);
 }
 
-void cpu_final_eval(int n, const void* h_y_hy, const void* h_A_ptr, const void* h_x_ptr, double* out) {
-    const float128_t* y_hy = (const float128_t*)h_y_hy;
-    const float128_t* A = (const float128_t*)h_A_ptr;
-    const float128_t* x = (const float128_t*)h_x_ptr;
-    vector<float128_t> y_tr(n, 0.0Q);
-    #pragma omp parallel for
-    for(int i=0; i<n; i++) for(int j=0; j<n; j++) y_tr[i] += A[(size_t)i*n+j] * x[j];
-    float128_t err_sq = 0;
-    for(int i=0; i<n; i++) { float128_t d = y_tr[i] - y_hy[i]; err_sq += d * d; }
-    out[0] = (double)sqrtq(err_sq / (float128_t)n);
-}
-
-void cpu_naive_fp128(int n, const void* A_ptr, const void* x_ptr, void* y_ptr, double* time_ms) {
+void cpu_calc_truth_fp256(int n, const void* A_ptr, const void* x_ptr, void* y_truth_ptr) {
     const float128_t* A = (const float128_t*)A_ptr;
     const float128_t* x = (const float128_t*)x_ptr;
-    float128_t* y = (float128_t*)y_ptr;
-    double start = omp_get_wtime();
-    #pragma omp parallel for
-    for(int i=0; i<n; i++) {
-        float128_t sum = 0;
-        for(int j=0; j<n; j++) sum += A[(size_t)i*n+j] * x[j];
-        y[i] = sum;
+    float128_t* y_out = (float128_t*)y_truth_ptr;
+    #pragma omp parallel
+    {
+        mpfr_t ma, mx, msum, mprod;
+        mpfr_inits2(256, ma, mx, msum, mprod, (mpfr_ptr)0);
+        char buf[128];
+        #pragma omp for
+        for(int i=0; i<n; i++) {
+            mpfr_set_zero(msum, 1);
+            for(int j=0; j<n; j++) {
+                quadmath_snprintf(buf, sizeof(buf), "%.40Qe", A[(size_t)i*n+j]); mpfr_set_str(ma, buf, 10, MPFR_RNDN);
+                quadmath_snprintf(buf, sizeof(buf), "%.40Qe", x[j]); mpfr_set_str(mx, buf, 10, MPFR_RNDN);
+                mpfr_mul(mprod, ma, mx, MPFR_RNDN); mpfr_add(msum, msum, mprod, MPFR_RNDN);
+            }
+            quadmath_snprintf(buf, sizeof(buf), "%.45Re", msum); y_out[i] = strtoflt128(buf, NULL);
+        }
+        mpfr_clears(ma, mx, msum, mprod, (mpfr_ptr)0);
     }
-    *time_ms = (omp_get_wtime() - start) * 1000.0;
+}
+
+double measure_rmse_mpfr(int n, const void* A_ptr, const void* x_ptr, const void* y_test_ptr) {
+    const float128_t* A = (const float128_t*)A_ptr;
+    const float128_t* x = (const float128_t*)x_ptr;
+    const float128_t* y_test = (const float128_t*)y_test_ptr;
+    mpfr_t sum_err_sq, ma, mx, mprod, mtruth, mtest, mdiff;
+    mpfr_inits2(256, sum_err_sq, ma, mx, mprod, mtruth, mtest, mdiff, (mpfr_ptr)0);
+    mpfr_set_zero(sum_err_sq, 1);
+    char buf[128];
+    for(int i=0; i<n; i++) {
+        mpfr_set_zero(mtruth, 1);
+        for(int j=0; j<n; j++) {
+            quadmath_snprintf(buf, sizeof(buf), "%.40Qe", A[(size_t)i*n+j]); mpfr_set_str(ma, buf, 10, MPFR_RNDN);
+            quadmath_snprintf(buf, sizeof(buf), "%.40Qe", x[j]); mpfr_set_str(mx, buf, 10, MPFR_RNDN);
+            mpfr_mul(mprod, ma, mx, MPFR_RNDN); mpfr_add(mtruth, mtruth, mprod, MPFR_RNDN); // 修正: msum -> mtruth
+        }
+        quadmath_snprintf(buf, sizeof(buf), "%.40Qe", y_test[i]); mpfr_set_str(mtest, buf, 10, MPFR_RNDN);
+        mpfr_sub(mdiff, mtruth, mtest, MPFR_RNDN); mpfr_mul(mdiff, mdiff, mdiff, MPFR_RNDN); mpfr_add(sum_err_sq, sum_err_sq, mdiff, MPFR_RNDN);
+    }
+    mpfr_div_ui(sum_err_sq, sum_err_sq, n, MPFR_RNDN); mpfr_sqrt(sum_err_sq, sum_err_sq, MPFR_RNDN);
+    double rmse = mpfr_get_d(sum_err_sq, MPFR_RNDN);
+    mpfr_clears(sum_err_sq, ma, mx, mprod, mtruth, mtest, mdiff, (mpfr_ptr)0);
+    return rmse;
+}
+
+void cpu_benchmark_baselines(int n, const void* A_ptr, const void* x_ptr, const void* y_truth_ptr, 
+                             double* t128, double* err128, double* t64, double* err64) {
+    const float128_t* A = (const float128_t*)A_ptr;
+    const float128_t* x = (const float128_t*)x_ptr;
+    double s128 = omp_get_wtime();
+    vector<float128_t> y128(n, 0.0Q);
+    for(int i=0; i<n; i++) for(int j=0; j<n; j++) y128[i] += A[(size_t)i*n+j] * x[j];
+    *t128 = (omp_get_wtime() - s128) * 1000.0;
+    *err128 = measure_rmse_mpfr(n, A_ptr, x_ptr, y128.data());
+    double s64 = omp_get_wtime();
+    vector<double> y64(n, 0.0);
+    for(int i=0; i<n; i++) for(int j=0; j<n; j++) y64[i] += (double)A[(size_t)i*n+j] * (double)x[j];
+    *t64 = (omp_get_wtime() - s64) * 1000.0;
+    vector<float128_t> y64_f128(n); for(int i=0; i<n; i++) y64_f128[i] = (float128_t)y64[i];
+    *err64 = measure_rmse_mpfr(n, A_ptr, x_ptr, y64_f128.data());
 }
