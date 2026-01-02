@@ -8,7 +8,7 @@
 
 void run_safe_test(int n, cublasHandle_t handle) {
     size_t n_sq = (size_t)n * n;
-    void *h_A_f128, *h_x_f128; // GPUからは void* として扱う
+    void *h_A_f128, *h_x_f128;
     allocate_and_init_f128(n, &h_A_f128, &h_x_f128);
 
     half *d_sa_single, *d_sx_all; float *d_tmpc;
@@ -16,9 +16,11 @@ void run_safe_test(int n, cublasHandle_t handle) {
     cudaMalloc(&d_sx_all, (size_t)S_VEC * n * 2);
     cudaMalloc(&d_tmpc, (size_t)S_MAT * S_VEC * n * 4);
 
-    double rho = 11.0; 
-    std::vector<half> h_sa_all(n_sq * S_MAT); std::vector<int> h_ta_all(n * S_MAT);
-    std::vector<half> h_sx(n * S_VEC); std::vector<int> h_tx(S_VEC);
+    double rho = 7.0; 
+    std::vector<half> h_sa_all(n_sq * S_MAT); 
+    std::vector<int> h_ta_all(n * S_MAT);      // 行列用 ta: S * n
+    std::vector<half> h_sx(n * S_VEC); 
+    std::vector<int> h_tx(S_VEC);              // ベクトル用 tx: S 個
 
     printf("N=%d | High-Prec Splitting...\n", n);
     split_matrix_f128(n, S_MAT, h_A_f128, h_sa_all.data(), h_ta_all.data(), rho);
@@ -51,6 +53,7 @@ void run_safe_test(int n, cublasHandle_t handle) {
 
 int main() {
     cublasHandle_t h; cublasCreate(&h);
+    printf("--- Ozaki Engine Safe Sanctuary (RTX 2060) ---\n");
     for(int n=128; n<=4096; n*=2) run_safe_test(n, h);
     cublasDestroy(h); cudaDeviceReset(); return 0;
 }

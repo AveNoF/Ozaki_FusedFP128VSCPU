@@ -7,56 +7,60 @@
 
 using namespace std;
 
-// 128bit データの生成
 void allocate_and_init_f128(int n, void** A_ptr, void** x_ptr) {
     size_t n_sq = (size_t)n * n;
     float128_t* A = (float128_t*)malloc(n_sq * 16);
     float128_t* x = (float128_t*)malloc(n * 16);
     for(size_t i=0; i<n_sq; i++) A[i] = (float128_t)rand()/RAND_MAX + (float128_t)rand()/RAND_MAX * 1e-18Q;
     for(int i=0; i<n; i++) x[i] = (float128_t)rand()/RAND_MAX + (float128_t)rand()/RAND_MAX * 1e-18Q;
-    *A_ptr = (void*)A;
-    *x_ptr = (void*)x;
+    *A_ptr = (void*)A; *x_ptr = (void*)x;
 }
 
-void free_f128(void* A_ptr, void* x_ptr) {
-    free(A_ptr); free(x_ptr);
-}
+void free_f128(void* A_ptr, void* x_ptr) { free(A_ptr); free(x_ptr); }
 
-// 分割ロジック (128bit)
-void split_common_f128(int n, size_t size, int s_count, const float128_t* src, half* dst_h, int* dst_t, double rho) {
-    vector<float128_t> res(size);
-    for(size_t i=0; i<size; i++) res[i] = src[i];
+// 行列の分割: 行ごとに指数 ta を持つ (S_MAT * n 個)
+void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_ta, double rho) {
+    size_t n_sq = (size_t)n * n;
+    const float128_t* A = (const float128_t*)A_ptr;
+    vector<float128_t> res(n_sq);
+    for(size_t i=0; i<n_sq; i++) res[i] = A[i];
 
-    for (int s = 0; s < s_count; s++) {
+    for (int s = 0; s < s_mat; s++) {
         #pragma omp parallel for
         for (int i = 0; i < n; i++) {
             float128_t mx = 0;
-            if (size == (size_t)n) { // ベクトル
-                for(int k=0; k<n; k++) if(fabsq(res[k]) > mx) mx = fabsq(res[k]);
-            } else { // 行列 (行ごとの最大値)
-                for(int j=0; j<n; j++) if(fabsq(res[(size_t)i*n+j]) > mx) mx = fabsq(res[(size_t)i*n+j]);
-            }
-            int tx = 0;
-            if(mx > 0) frexpq(mx, &tx);
-            dst_t[s * n + i] = tx;
-
+            for(int j=0; j<n; j++) if(fabsq(res[(size_t)i*n+j]) > mx) mx = fabsq(res[(size_t)i*n+j]);
+            int tx = 0; if(mx > 0) frexpq(mx, &tx);
+            h_ta[s * n + i] = tx;
             float128_t sigma = scalbnq(0.75Q, (int)rho + tx);
-            for (size_t j = 0; j < (size == (size_t)n ? 1 : n); j++) {
-                size_t idx = (size == (size_t)n) ? i : (size_t)i * n + j;
+            for (int j = 0; j < n; j++) {
+                size_t idx = (size_t)i * n + j;
                 float128_t q = (res[idx] + sigma) - sigma;
-                dst_h[s * size + idx] = __double2half((double)scalbnq(q, -tx));
-                res[idx] -= scalbnq((float128_t)dst_h[s * size + idx], tx);
+                h_sa[(size_t)s * n_sq + idx] = __double2half((double)scalbnq(q, -tx));
+                res[idx] -= scalbnq((float128_t)h_sa[(size_t)s * n_sq + idx], tx);
             }
         }
     }
 }
 
-void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_ta, double rho) {
-    split_common_f128(n, (size_t)n*n, s_mat, (const float128_t*)A_ptr, h_sa, h_ta, rho);
-}
-
+// ベクトルの分割: 分割ごとに1つの指数 tx を持つ (S_VEC 個)
 void split_vector_f128(int n, int s_vec, const void* v_ptr, half* h_sx, int* h_tx, double rho) {
-    split_common_f128(n, (size_t)n, s_vec, (const float128_t*)v_ptr, h_sx, h_tx, rho);
+    const float128_t* v = (const float128_t*)v_ptr;
+    vector<float128_t> res(n);
+    for(int i=0; i<n; i++) res[i] = v[i];
+
+    for (int t = 0; t < s_vec; t++) {
+        float128_t mx = 0;
+        for(int i=0; i<n; i++) if(fabsq(res[i]) > mx) mx = fabsq(res[i]);
+        int tx = 0; if(mx > 0) frexpq(mx, &tx);
+        h_tx[t] = tx; // ここで S_VEC の範囲内にのみ書き込む
+        float128_t sigma = scalbnq(0.75Q, (int)rho + tx);
+        for (int i = 0; i < n; i++) {
+            float128_t q = (res[i] + sigma) - sigma;
+            h_sx[(size_t)t * n + i] = __double2half((double)scalbnq(q, -tx));
+            res[i] -= scalbnq((float128_t)h_sx[(size_t)t * n + i], tx);
+        }
+    }
 }
 
 void cpu_reconstruct_and_eval(int n, int s_mat, int s_vec, const float* h_tmpc, const int* h_ta, const int* h_tx, const void* h_A_ptr, const void* h_x_ptr, double t_gpu_ms, double* out) {
