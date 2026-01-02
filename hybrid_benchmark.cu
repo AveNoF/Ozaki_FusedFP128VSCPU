@@ -3,7 +3,7 @@
 #include <iostream>
 #include <vector>
 
-#define S_MAT 16  // 33桁保証のための分割数
+#define S_MAT 16 
 #define S_VEC 16
 #define MAX_THREADS 1024
 
@@ -40,7 +40,7 @@ void run_safe_test(int n, cublasHandle_t handle) {
     size_t n_sq = (size_t)n * n;
     std::vector<double> h_A(n_sq);
     for(size_t i=0; i<n_sq; i++) h_A[i] = (double)rand()/RAND_MAX;
-    void* h_x = malloc(n * 16); // float128用領域
+    void* h_x = malloc(n * 16);
 
     double *d_A_res; half *d_sa_single, *d_sx_all; int *d_ta_single, *d_tx_all; float *d_tmpc;
     cudaMalloc(&d_A_res, n_sq * 8); cudaMalloc(&d_sa_single, n_sq * 2);
@@ -48,9 +48,8 @@ void run_safe_test(int n, cublasHandle_t handle) {
     cudaMalloc(&d_tx_all, S_VEC * 4); cudaMalloc(&d_tmpc, (size_t)S_MAT * S_VEC * n * 4);
 
     cudaMemcpy(d_A_res, h_A.data(), n_sq * 8, cudaMemcpyHostToDevice);
-    double rho = 7.0; // ハーフ抽出用に最適化
+    double rho = 7.0; 
 
-    // 1. 行列分割 (ホストへストリーミング)
     std::vector<half> h_sa_all(n_sq * S_MAT);
     std::vector<int> h_ta_all(n * S_MAT);
     for(int s=0; s<S_MAT; s++) {
@@ -59,13 +58,11 @@ void run_safe_test(int n, cublasHandle_t handle) {
         cudaMemcpy(h_ta_all.data() + (size_t)s*n, d_ta_single, n*4, cudaMemcpyDeviceToHost);
     }
 
-    // 2. ベクトル分割
     std::vector<half> h_sx(n * S_VEC); std::vector<int> h_tx(S_VEC);
     split_vector_f128(n, S_VEC, h_x, h_sx.data(), h_tx.data(), rho);
     cudaMemcpy(d_sx_all, h_sx.data(), (size_t)n * S_VEC * 2, cudaMemcpyHostToDevice);
     cudaMemcpy(d_tx_all, h_tx.data(), S_VEC * 4, cudaMemcpyHostToDevice);
 
-    // 3. 計算実行
     cudaEvent_t st, ed; cudaEventCreate(&st); cudaEventCreate(&ed); cudaEventRecord(st);
     for(int s=0; s<S_MAT; s++) {
         cudaMemcpy(d_sa_single, h_sa_all.data() + (size_t)s*n_sq, n_sq*2, cudaMemcpyHostToDevice);
@@ -77,7 +74,6 @@ void run_safe_test(int n, cublasHandle_t handle) {
     cudaEventRecord(ed); cudaEventSynchronize(ed);
     float t_gpu; cudaEventElapsedTime(&t_gpu, st, ed);
 
-    // 4. 再構成と評価
     std::vector<float> h_tmpc((size_t)S_MAT*S_VEC*n);
     cudaMemcpy(h_tmpc.data(), d_tmpc, h_tmpc.size()*4, cudaMemcpyDeviceToHost);
     double res[2];
