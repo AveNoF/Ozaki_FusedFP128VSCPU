@@ -11,14 +11,15 @@
 #endif
 
 extern "C" {
-    // 33桁精度のベクトル生成と分割
-    void split_vector_f128(int n, int s_vec, void* v_ptr, half* h_sx, int* h_tx, double rho);
+    // 33桁行列とベクトルの高精度分割
+    void split_matrix_f128(int n, int s_mat, const void* A_ptr, half* h_sa, int* h_ta, double rho);
+    void split_vector_f128(int n, int s_vec, const void* v_ptr, half* h_sx, int* h_tx, double rho);
 
-    // 高精度再構成と誤差評価
+    // 33桁再構成と評価
     void cpu_reconstruct_and_eval(
         int n, int s_mat, int s_vec,
         const float* h_tmpc, const int* h_ta, const int* h_tx,
-        const double* h_A, const void* h_x_ptr,
+        const void* h_A_ptr, const void* h_x_ptr,
         double t_gpu_ms, double* results
     );
 }
